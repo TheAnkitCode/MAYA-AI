@@ -14,10 +14,4 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
-
-    sourceSets {
-        getByName("main") {
-            manifest.srcFile("src/main/AndroidManifest.xml")
-        }
-    }
 }
