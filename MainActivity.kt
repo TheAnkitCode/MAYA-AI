@@ -1,146 +1,399 @@
+
 package com.maya.assistant
 
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.view.Gravity
-import android.graphics.Color
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
-    private var tts: TextToSpeech? = null
-    private var recognizer: SpeechRecognizer? = null
+
     private lateinit var status: TextView
-    private val reqAudio = 101
+    private lateinit var conversation: TextView
+    private lateinit var input: EditText
+    private lateinit var tts: TextToSpeech
+
+    private var recognizer: SpeechRecognizer? = null
+    private var ttsReady = false
+    private var wakeMode = false
+    private var listening = false
+    private var waitingForCommand = false
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val restartWake = Runnable {
+        if (wakeMode && !isFinishing) {
+            startListening(true)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         tts = TextToSpeech(this, this)
-        val layout = LinearLayout(this).apply {
+        buildUi()
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO), 100
+            )
+        } else {
+            initializeRecognizer()
+        }
+    }
+
+    private fun buildUi() {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(28, 40, 28, 40)
-            setBackgroundColor(Color.rgb(30, 15, 42))
+            setPadding(24, 30, 24, 24)
+            gravity = Gravity.CENTER_HORIZONTAL
         }
+
         val title = TextView(this).apply {
-            text = "MAYA AI 💜"
+            text = "💜 MAYA AI"
             textSize = 30f
-            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
+
         status = TextView(this).apply {
-            text = "Namaste! Main Maya hoon. Mic dabakar bolo."
-            textSize = 18f
-            setTextColor(Color.WHITE)
+            text = "Namaste! Main MAYA hoon."
+            textSize = 17f
             gravity = Gravity.CENTER
-            setPadding(0, 28, 0, 28)
+            setPadding(0, 18, 0, 18)
         }
-        val mic = Button(this).apply {
-            text = "🎙️ Bolo Maya"
-            setOnClickListener { startListening() }
-        }
-        val insta = Button(this).apply {
-            text = "Instagram kholo"
-            setOnClickListener { openApp("com.instagram.android", "Instagram nahi mila. Pehle install karo.") }
-        }
-        val yt = Button(this).apply {
-            text = "YouTube kholo"
-            setOnClickListener { openApp("com.google.android.youtube", "YouTube nahi mila.") }
-        }
-        layout.addView(title); layout.addView(status); layout.addView(mic); layout.addView(insta); layout.addView(yt)
-        setContentView(layout)
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), reqAudio)
-        }
-        speak("Namaste! Main Maya hoon. Aap mic dabakar mujhse baat kar sakte hain.")
-    }
 
-    override fun onInit(statusCode: Int) {
-        if (statusCode == TextToSpeech.SUCCESS) {
-            val result = tts?.setLanguage(Locale("hi", "IN"))
-            tts?.setSpeechRate(0.95f)
+        conversation = TextView(this).apply {
+            textSize = 16f
+            text = "MAYA: Hey MAYA bolkar try karo."
         }
-    }
 
-    private fun speak(text: String) {
-        status.text = text
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "maya_speech")
-    }
+        val scroll = ScrollView(this)
+        scroll.addView(conversation)
+        root.addView(title)
+        root.addView(status)
+        root.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
 
-    private fun startListening() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            speak("Is phone par speech recognition available nahi hai.")
-            return
+        input = EditText(this).apply {
+            hint = "Yahan message type karo..."
+            textSize = 16f
         }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), reqAudio)
-            return
-        }
-        recognizer?.destroy()
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { status.text = "Sun rahi hoon..." }
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() { status.text = "Samajh rahi hoon..." }
-            override fun onError(error: Int) { status.text = "Awaaz clear nahi aayi. Dobara mic dabao." }
-            override fun onResults(results: Bundle?) {
-                val words = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                handleCommand(words)
+        root.addView(input)
+
+        val send = Button(this).apply {
+            text = "Message bhejo"
+            setOnClickListener {
+                val message = input.text.toString().trim()
+                if (message.isNotEmpty()) {
+                    input.text.clear()
+                    handleCommand(message)
+                }
             }
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Maya se baat karein")
         }
-        recognizer?.startListening(intent)
+
+        val mic = Button(this).apply {
+            text = "🎙️ Voice command"
+            setOnClickListener {
+                wakeMode = false
+                waitingForCommand = false
+                startListening(false)
+            }
+        }
+
+        val wake = Button(this).apply {
+            text = "Hey MAYA mode ON"
+            setOnClickListener {
+                if (recognizer == null) {
+                    initializeRecognizer()
+                }
+                wakeMode = true
+                waitingForCommand = false
+                startListening(true)
+            }
+        }
+
+        val stop = Button(this).apply {
+            text = "Listening band karo"
+            setOnClickListener {
+                wakeMode = false
+                listening = false
+                waitingForCommand = false
+                handler.removeCallbacks(restartWake)
+                try {
+                    recognizer?.cancel()
+                } catch (_: Exception) { }
+                status.text = "Voice listening band hai."
+            }
+        }
+
+        root.addView(send)
+        root.addView(mic)
+        root.addView(wake)
+        root.addView(stop)
+
+        setContentView(root)
+    }
+
+    private fun initializeRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            status.text = "Speech recognition service available nahi hai."
+            return
+        }
+
+        try {
+            recognizer?.destroy()
+
+            recognizer = if (
+                android.os.Build.VERSION.SDK_INT >= 31 &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+            ) {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(this)
+            }
+
+            recognizer?.setRecognitionListener(
+                object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        listening = true
+                        status.text = if (waitingForCommand) {
+                            "MAYA sun rahi hai, command bolo..."
+                        } else {
+                            "Sun rahi hoon... Hey MAYA bolo."
+                        }
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        listening = false
+                        val matches = results?.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION
+                        )
+                        val spoken = matches?.firstOrNull().orEmpty()
+
+                        if (spoken.isBlank()) {
+                            scheduleWakeAgain()
+                            return
+                        }
+
+                        if (waitingForCommand) {
+                            waitingForCommand = false
+                            addLine("Tum", spoken)
+                            handleCommand(spoken)
+                            scheduleWakeAgain()
+                        } else if (wakeMode &&
+                            spoken.lowercase(Locale.ROOT)
+                                .contains("maya")) {
+                            waitingForCommand = true
+                            speak("Haan ji, bolo. Main sun rahi hoon.")
+                            handler.postDelayed({
+                                startListening(false)
+                            }, 1800)
+                        } else if (!wakeMode) {
+                            addLine("Tum", spoken)
+                            handleCommand(spoken)
+                        } else {
+                            scheduleWakeAgain()
+                        }
+                    }
+
+                    override fun onError(error: Int) {
+                        listening = false
+                        if (wakeMode) scheduleWakeAgain()
+                        else status.text = "Dobara mic dabakar try karo."
+                    }
+
+                    override fun onBeginningOfSpeech() {
+                        status.text = "Awaaz detect ho rahi hai..."
+                    }
+
+                    override fun onEndOfSpeech() {
+                        listening = false
+                    }
+
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                    override fun onPartialResults(partialResults: Bundle?) {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                }
+            )
+        } catch (e: Exception) {
+            status.text = "Recognizer start nahi hua: ${e.message}"
+        }
+    }
+
+    private fun startListening(forWake: Boolean) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+            return
+        }
+
+        if (recognizer == null) initializeRecognizer()
+        if (recognizer == null || listening) return
+
+        waitingForCommand = !forWake
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+
+        try {
+            recognizer?.startListening(intent)
+        } catch (e: Exception) {
+            listening = false
+            status.text = "Listening shuru nahi hui."
+            scheduleWakeAgain()
+        }
+    }
+
+    private fun scheduleWakeAgain() {
+        if (wakeMode && !isFinishing) {
+            handler.removeCallbacks(restartWake)
+            handler.postDelayed(restartWake, 1200)
+        }
     }
 
     private fun handleCommand(raw: String) {
-        val q = raw.lowercase(Locale.ROOT)
+        val command = raw.lowercase(Locale.ROOT)
+        val answer: String
+
         when {
-            q.contains("instagram") && (q.contains("kholo") || q.contains("open")) -> {
-                speak("Ji, Instagram khol rahi hoon.")
-                openApp("com.instagram.android", "Instagram phone mein install nahi hai.")
+            command.contains("time") ||
+            command.contains("समय") ||
+            command.contains("kitne baje") -> {
+                answer = "Abhi ${SimpleDateFormat(
+                    "hh:mm a", Locale.getDefault()
+                ).format(Date())} baj rahe hain."
+                speak(answer)
             }
-            q.contains("youtube") && (q.contains("kholo") || q.contains("open")) -> {
-                speak("Ji, YouTube khol rahi hoon.")
-                openApp("com.google.android.youtube", "YouTube phone mein install nahi hai.")
+
+            command.contains("youtube") &&
+            (command.contains("kholo") ||
+             command.contains("open")) -> {
+                answer = "YouTube khol rahi hoon."
+                speak(answer)
+                openUrl("https://www.youtube.com")
             }
-            q.contains("chrome") && (q.contains("kholo") || q.contains("open")) -> {
-                speak("Ji, Chrome kholne ki koshish kar rahi hoon.")
-                openApp("com.android.chrome", "Chrome phone mein install nahi hai.")
+
+            command.contains("google") &&
+            (command.contains("kholo") ||
+             command.contains("open")) -> {
+                answer = "Google khol rahi hoon."
+                speak(answer)
+                openUrl("https://www.google.com")
             }
-            q.contains("message") || q.contains("msg") || q.contains("मैसेज") -> {
-                speak("Main message tayyar karne mein madad kar sakti hoon. Instagram khol rahi hoon; bhejne se pehle sahi vyakti aur message khud check kar lena.")
-                openApp("com.instagram.android", "Instagram install nahi hai.")
+
+            command.contains("hello") ||
+            command.contains("namaste") ||
+            command.contains("हेलो") -> {
+                answer = "Hello ji! Batao, main tumhari kya help karun?"
+                speak(answer)
             }
-            q.contains("hello") || q.contains("hi") || q.contains("maya") || q.contains("kaisi") -> speak("Main achchi hoon! Batao, main tumhari kya madad karun?")
-            else -> speak("Maine suna: $raw. Abhi main basic commands samajh sakti hoon. Aur commands baad mein add kar sakte hain.")
+
+            command.contains("tumhara naam") ||
+            command.contains("your name") -> {
+                answer = "Mera naam MAYA hai. Main tumhari AI assistant hoon."
+                speak(answer)
+            }
+
+            else -> {
+                answer = "Tumne kaha: $raw. Is command ke liye abhi feature add karna hoga."
+                speak(answer)
+            }
+        }
+
+        addLine("MAYA", answer)
+    }
+
+    private fun openUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            Toast.makeText(this, "App open nahi hua.", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openApp(packageName: String, fallback: String) {
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
-        if (launch != null) startActivity(launch) else speak(fallback)
+    private fun addLine(who: String, message: String) {
+        conversation.append("\n\n$who: $message")
+    }
+
+    private fun speak(message: String) {
+        if (ttsReady) {
+            tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "maya_reply")
+        }
+        status.text = message
+    }
+
+    override fun onInit(result: Int) {
+        if (result == TextToSpeech.SUCCESS) {
+            val hindi = tts.setLanguage(Locale("hi", "IN"))
+            ttsReady = hindi != TextToSpeech.LANG_MISSING_DATA &&
+                hindi != TextToSpeech.LANG_NOT_SUPPORTED
+
+            // Voice gender and quality depend on installed TTS voices.
+            tts.setSpeechRate(0.94f)
+            tts.setPitch(1.12f)
+
+            if (!ttsReady) {
+                status.text = "Hindi voice install ya select karo in phone settings."
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 100 &&
+            grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            initializeRecognizer()
+            status.text = "Permission mil gayi. Hey MAYA button dabao."
+        } else {
+            status.text = "Voice feature ke liye microphone permission chahiye."
+        }
     }
 
     override fun onDestroy() {
-        recognizer?.destroy()
-        tts?.shutdown()
+        handler.removeCallbacksAndMessages(null)
+        try {
+            recognizer?.cancel()
+            recognizer?.destroy()
+        } catch (_: Exception) { }
+        if (::tts.isInitialized) {
+            tts.stop()
+            tts.shutdown()
+        }
         super.onDestroy()
     }
 }
