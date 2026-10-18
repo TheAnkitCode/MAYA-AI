@@ -1,14 +1,14 @@
 plugins {
-    id("com.android.application") version "8.7.0"
-    id("org.jetbrains.kotlin.android") version "2.0.0"
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
-    namespace = "com.maya.assistant"
+    namespace = "com.maya.gurugram"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.maya.assistant"
+        applicationId = "com.maya.gurugram"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
